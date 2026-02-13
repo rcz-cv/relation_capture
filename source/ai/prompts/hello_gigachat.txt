@@ -1,0 +1,25 @@
+#
+# hello_gigachat.txt
+#
+# Prompt parameters for Hello World test using GigaChat.
+#
+
+========== try1 ===================
+
+model: "GigaChat-2-Max"
+messages: [
+    { role: "system", content: role_system }
+    { role: "user",   content: role_user }
+]
+max_tokens: 100
+stream: false
+
+---------- role_system ------------
+
+You are a helpful assistant.
+
+---------- role_user --------------
+
+Write a haiku about recursion in programming.
+
+===================================

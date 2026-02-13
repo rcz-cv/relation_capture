@@ -1,0 +1,6 @@
+#
+# aws_version.txt
+#
+
+$Version$
+0.9.0-aws+$BuildNumber$

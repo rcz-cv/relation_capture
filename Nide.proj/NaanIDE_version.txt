@@ -1,0 +1,6 @@
+#
+# NaanIDE_version.txt
+#
+
+$Version$
+0.1.$BuildNumber$

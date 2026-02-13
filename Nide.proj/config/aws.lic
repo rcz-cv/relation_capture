@@ -1,0 +1,8 @@
+#
+# aws.lic
+#
+# License file for AWS builds
+#
+
+$CloudName$
+aws

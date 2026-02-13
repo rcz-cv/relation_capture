@@ -1,0 +1,116 @@
+/*
+ * utils.nlg
+ * relation_capture
+ *
+ * Support utilities.
+ *
+ * column positioning:                          //                          //                      !
+ *
+ * Copyright (c) 2026 by Richard C. Zulch
+ *
+ */
+
+
+
+
+/*
+ * readFileBrowser
+ *
+ * Fetch a file from our built runtime, returning `(error, content). The fetchpath must have the
+ * appropriate prefix, typically config.localRootPath starting with "/run".
+ *
+ */
+    
+closure readFileBrowser(fetchpath, encoding, local error, content) {
+    global(js)
+    `(error, content) = await(js.w.fetch(fetchpath).then(function(response) {
+        if response.ok {
+            if encoding == "json"
+                response.json()
+            else if encoding == "blob"
+                response.blob()
+            else if encoding == "arrayBuffer"
+                response.arrayBuffer()
+            else
+                response.text()
+        }
+        else
+            Promise.reject(response.status)
+    }))
+    if error
+        error = Error("readRuntimeFile failed:", fetchpath, "(".concat(error, ")"))
+    else if encoding == "arrayBuffer"
+        content = xnew(js.w.Uint8Array, content)                            // make it a typed array like NodeJS
+    list(error, content)
+};
+
+
+/*
+ * readFileNode
+ *
+ * Fetch a file from our built runtime, returning `(error, content). The fetchpath must have the
+ * appropriate prefix, typically js.d and config.localRootPath.
+ *
+ */
+    
+closure readFileNode(filepath, encoding, local options, error, data) {
+    global(nodeFs, nodePath)
+    filepath = nodePath.resolve("/tmp", filepath)
+    options = { }
+    if !encoding || encoding == "text" || encoding == "json"
+        options.encoding = "utf8"
+    else if encoding == "arrayBuffer"
+        encoding = "binary"
+    else if encoding != "binary"
+        error = Error("readFileNode: invalid encoding", encoding)
+    if !error {
+        `(error, data) = await(nodeFs.promises.readFile(filepath, options))
+        if !error && encoding == "json"
+            `(error, data) = JsonParse(data)
+        if error
+            error = Error("ReadFile failed:", filepath, error)
+    }
+    list(error, data)
+};
+
+
+/*
+ * readRuntimeFile
+ *
+ * Fetch a file from our built runtime, returning `(error, content). The fetchpath must have the
+ * appropriate prefix, typically "/run" and config.localRootPath.
+ *
+ */
+    
+closure readRuntimeFile(fetchpath, encoding) {
+    global(js)
+    if js.w
+        readFileBrowser(fetchpath, encoding)
+    else
+        readFileNode(fetchpath, encoding)
+};
+
+
+/*
+ * utilsInit
+ *
+ *     Initialize the utils component.
+ *
+ */
+
+function utilsInit(local manifest) {
+    manifest = `(readFileBrowser, readFileNode, readRuntimeFile)
+
+    loglevel(3)
+    Naan.module.build(module.id, "utils", function(modobj, compobj) {
+        compobj.manifest = manifest
+        if js.g {
+            function postload() {
+                nodeFs = js.r("fs")
+                nodeHomePath = js.r("os").homedir()
+                nodePath = js.r("path")
+            }()
+            module.postload = postload
+        }
+    })
+} ();

@@ -1,0 +1,25 @@
+#
+# hello_openai.txt
+#
+# Prompt parameters for Hello World test using OpenAI.
+#
+
+========== try1 ===================
+
+model: "gpt-4o-mini"
+messages: [
+    { role: "system", content: role_system }
+    { role: "user",   content: role_user }
+]
+max_tokens: 100
+stream: false
+
+---------- role_system ------------
+
+You are a helpful assistant.
+
+---------- role_user --------------
+
+Write a haiku about recursion in programming.
+
+===================================

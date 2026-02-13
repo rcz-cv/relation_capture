@@ -1,0 +1,223 @@
+/*
+ * ai.nlg
+ * relation_capture
+ *
+ * AI processing.
+ *
+ * column positioning:                          //                          //                      !
+ *
+ * Copyright (c) 2024-2026 by Richard C. Zulch
+ *
+ */
+
+
+/*
+ * OpenAI
+ *
+ *     OpenAI access using the NodeJS SDK for local access.
+ *
+ */
+
+closure OpenAI(local opail) {
+    global(js)
+    opail = new(object, this)
+
+    // install
+    //
+    // Install and/or update the OpenAI SDK package.
+    //
+    opail.install = closure install(rootpath, local error, fs, output) {
+        if !rootpath
+            rootpath = js.d
+        debuglog("OpenAI.install at", rootpath)
+        `(error, fs) = require("naanlib:frameworks/node/filesystem.nlg").Filesystem("")
+        if !error
+            `(error, output) = fs.execLines("npm", {
+                cmdargs: ["install", "--save", "openai"]
+                execops: {
+                    cwd: rootpath
+                }
+            })
+        if !error {
+            if output.exitCode != 0
+                error = Error("npm gave non-zero exit code: ${output.exitCode}", {
+                    stderr: output.stderr.join("\n")
+                })
+        }
+        if error
+            list(error)
+        else
+            list(false, output.stdout.join("\n"))
+    }
+
+    // login
+    //
+    // Login to OpenAI SDK using the specified credentials.
+    //
+    // creds:
+    //  {
+    //      apiKey:         <string>
+    //  }
+    //
+    opail.login = closure login(creds, path, local error, data, doins) {
+        loop
+            try {
+                if doins {
+                    `(error, data) = install(path)
+                    if error
+                        break
+                }
+                `(error, data) = await(js.i(js.r.resolve(path || "openai")))
+                if !error
+                    opail.cred_desc = creds.description
+                break
+            } catch {
+                error = Error("cannot open OpenAI SDK", exception)
+                if doins
+                    break
+                else
+                    debuglog("can't access openai at ${path || 'openai'}; installing...")
+                doins = true
+            }
+        if !error {
+            opail.aimod = data
+            opail.sdk = xnew(opail.aimod.OpenAI, { apiKey: creds.apiKey })
+            list(false, { ok: true })
+        } else
+            list(error)
+    }
+    
+    // info
+    //
+    // Report info about our model:
+    //  {
+    //      service:        <string>            // service name, i.e. "OpenAI"
+    //      account:        <string>            // account info, e.g. "ZulchLab-paid"
+    //  }
+    //
+    opail.info = closure info() {
+        {
+            service: "OpenAI"
+            account: opail.cred_desc || undefined
+        }
+    }
+
+    // chatCompletion
+    //
+    // Perform a chat completion using the specified parameters.
+    //
+    // params:
+    //  {
+    //      model:          <string>
+    //      messages:       [{ role: <string>, content: <string> } ...]
+    //     [max_tokens:     <integer>]
+    //     [stream:         <boolean>]
+    //     [Top_p:          <float>]
+    //  }
+    //
+    opail.chatCompletion = closure chatCompletion(params, local error, data) {
+        params = new(params)
+        if params.max_tokens {
+            params.max_completion_tokens = params.max_tokens > 16384 && 16384 || params.max_tokens
+            params.max_tokens = undefined
+        }
+        `(error, data) = await(opail.sdk.chat.completions.create(params))
+        if error
+            list(Error("chatCompletion failed:", new(error)))
+        else
+            list(false, new(data))
+    }
+
+    // finis
+    opail
+};
+
+
+/*
+ * OpenAIRelay
+ *
+ *     OpenAI access using a remote OpenAI object
+ *
+ */
+
+closure OpenAIRelay(local opair) {
+    global()
+    opair = new(object, this)
+
+    // login
+    //
+    // Login remotely to OpenAI SDK using the specified credentials.
+    //
+    // creds:
+    //  {
+    //      apiKey:         <string>
+    //      relayHost:      <string>
+    //      relayHostKey:   <string>
+    //  }
+    //
+    opair.login = closure login(creds, local error, data) {
+        opair.relay = require("naanlib:frameworks/client/relaycon.nlg").RelayCon(creds.relayHost, creds.relayHostKey, {
+            destID: "server"
+            wss: true
+            name: "OpenAI-relay"
+            config: { workerID: "OpenAI" }
+        })
+        `(error, data) = opair.relay.context()
+        if !error {
+            opair.context = data
+            `(error, data) = opair.context.evalq(OpenAI(), `(OpenAI))
+        }
+        if !error {
+            opair.proxy = data
+            `(error, data) = opair.proxy.login(creds)
+            if error
+                list(error)
+            else
+                list(false, { ok: true })
+        } else
+            list(error)
+    }
+
+    // info
+    //
+    // This call doesn't return a result tuple.
+    //
+    opair.info = closure info(local error, data) {
+        `(error, data) = opair.proxy.info()
+        data
+    }
+
+    // undef hook
+    //
+    // Call the remote for everything besides login.
+    //
+    opair@\.undefined = closure undef args {
+        let (procname, args, local error, data) {
+            `(error, data) = eval(list(deref, opair.proxy, procname, args))
+            while !error && tuple(data)
+                `(error, data) = data
+            list(error, data)
+        } (pop(args), args)
+    }
+
+    // finis
+    opair
+};
+
+
+/*
+ * voaiInit
+ *
+ *     Initialize the component.
+ *
+ */
+
+function voaiInit(local manifest) {
+    manifest = `(OpenAI, OpenAIRelay, voaiInit)
+    Naan.module.build(module.id, "v_openai", function(modobj, compobj) {
+        compobj.manifest = manifest
+        require("ai.nlg")
+        module.exports.OpenAI = OpenAI
+        module.exports.OpenAIRelay = OpenAIRelay
+    })
+} ();

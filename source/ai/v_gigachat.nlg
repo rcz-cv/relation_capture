@@ -1,0 +1,206 @@
+/*
+ * v_gigachat.nlg
+ * relation_capture
+ *
+ * AI processing.
+ *
+ * column positioning:                          //                          //                      !
+ *
+ * Copyright (c) 2024-2026 by Richard C. Zulch
+ *
+ */
+
+
+/*
+ * GigaChat
+ *
+ *     GigaChat access using the REST API.
+ *
+ * options:
+ *  {
+ *      preview:    <boolean>                   // true for preview models
+ *      debug:      <boolean>                   // https requests have additional diagnostics
+ *  }
+ *
+ */
+
+closure GigaChat(options, local giga) {
+    global(printline)
+    giga = new(object, this)
+
+    // install
+    //
+    // The REST API doesn't require installation.
+    //
+    giga.install = closure install(rootpath) {
+        list(false, { ok: true })
+    }
+
+    // login
+    //
+    // Login to OpenAI SDK using the specified credentials.
+    //
+    // creds:
+    //  {
+    //      authType:       <string>            // Basic
+    //      authKey:        <string>            // secret
+    //  }
+    //
+    giga.login = closure login(creds, local error, data) {
+        try {
+            giga.gcmod = require("naanlib:plugins/serviceGC/gc_api.nlg")
+            giga.gc = giga.gcmod.GcApi(options)
+            `(error, data) = giga.gc.login(creds)
+            if !error
+                giga.cred_desc = creds.description
+        } catch {
+            error = Error("gigachat: login failed:", error)
+        }
+        if error
+            list(error)
+        else
+            list(false, { ok: true })
+    }
+    
+    // info
+    //
+    // Report info about our model:
+    //  {
+    //      service:        <string>            // service name, i.e. "GigaChat"
+    //      account:        <string>            // account info, e.g. "top-30 uncensored"
+    //  }
+    //
+    giga.info = closure info() {
+        {
+            service: "GigaChat"
+            account: giga.cred_desc || undefined
+        }
+    }
+
+    // chatCompletion
+    //
+    // Perform a chat completion using the specified parameters.
+    //
+    // params:
+    //  {
+    //      model:          <string>
+    //      messages:       [{ role: <string>, content: <string> } ...]
+    //     [max_tokens:     <integer>]
+    //     [stream:         <boolean>]
+    //     [Top_p:          <float>]
+    //  }
+    //
+    giga.chatCompletion = closure chatCompletion(params, local hook, error, data) {
+        if params.stream
+            hook = vgcSseHook(printline)
+        `(error, data) = giga.gc.chatCompletion(params, hook.proc)
+        if error
+            list(error)
+        else
+            list(false, new(data))
+    }
+
+    // undef hook
+    //
+    // Call the API for everything besides login and chatCompletion.
+    //
+    giga@\.undefined = closure undef args {
+        let (procname, args) {
+            eval(list(deref, giga.gc, procname, args))
+        } (pop(args), args)
+    }
+
+    // finis
+    giga
+};
+
+
+/*
+ * vgcSseHook
+ *
+ * An SSE hook instance for a real-time result reporting.
+ *
+ */
+
+closure vgcSseHook(ssePrint, local hook) {
+    global()
+    hook = new(object, this)
+    hook.pending = new(nonce)
+    hook.accum = { 
+        user:               ""              // user role output
+        assistant:          ""              // assistant role output
+        prompt_tokens:      0               // prompt tokens
+        completion_tokens:  0               // completion tokens
+        total_tokens:       0               // combined tokens
+    }
+    
+    // sseHookProc
+    //
+    // The actual hook procedure.
+    //
+    hook.proc = function sseHookProc(message, local error, msg, content, runrole) {
+        if message.data.startsWith("[DONE]") {
+            ssePrint()
+            hook.pending.signal(list(false, hook.accum))
+        } else {
+            `(error, msg) = JsonParse(message.data)
+            content = msg.choices.0.delta.content
+            if runrole != msg.choices.0.delta.role && msg.choices.0.delta.role {
+                runrole = msg.choices.0.delta.role
+                ssePrint("Role: ${runrole}")
+            }
+            if !hook.accum.model
+                hook.accum.model = msg.model
+            if msg.choices.length == 1 && content {
+                if runrole == "user"
+                    hook.accum.user = hook.accum.user.concat(content)
+                else
+                    hook.accum.assistant = hook.accum.assistant.concat(content)
+            }
+            if msg.usage.prompt_tokens
+                hook.accum.prompt_tokens += msg.usage.prompt_tokens
+            if msg.usage.completion_tokens
+                hook.accum.completion_tokens += msg.usage.completion_tokens
+            if msg.usage.total_tokens
+                hook.accum.total_tokens += msg.usage.total_tokens
+            if msg.choices.length == 1 && content.length > 0
+                print(content)
+            else if msg.choices.0.finish_reason {
+                hook.finish_reason = msg.choices.0.finish_reason
+                ssePrint("\nFinished: ${ hook.finish_reason }")
+            }
+            else if msg
+                ssePrint(Dialect.print(new(msg)))
+            else
+                ssePrint("==> SSE json decode error:", message.data, error)
+        }
+    }
+    
+    // waitDone
+    //
+    // Wait until operation is done.
+    //
+    hook.waitDone = function waitDone() {
+        hook.pending.wait()
+    }
+    
+    // finis
+    hook
+};
+
+
+/*
+ * vgcInit
+ *
+ *     Initialize the component.
+ *
+ */
+
+function vgcInit(local manifest) {
+    manifest = `(GigaChat, vgcSseHook, vgcInit)
+    Naan.module.build(module.id, "v_gigachat", function(modobj, compobj) {
+        compobj.manifest = manifest
+        require("ai.nlg")
+        module.exports.GigaChat = GigaChat
+    })
+} ();

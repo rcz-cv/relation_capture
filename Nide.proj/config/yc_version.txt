@@ -1,0 +1,6 @@
+#
+# yc_version.txt
+#
+
+$Version$
+0.9.0-yc+$BuildNumber$

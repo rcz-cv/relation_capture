@@ -1,0 +1,177 @@
+/*
+ * main.nlg
+ * relation_capture
+ *
+ * Use AI to add a label to Flickr30k samples identifying if the caption is a relational.
+ *
+ * In order to test the key BLIP claim of improved sensitivity to relationship semantics, this
+ * augments the Flickr30k dataset with an additional boolean label: relational (true/false) that
+ * states whether the sample caption describes a relationship, e.g. "a child holding a cat",
+ * "a man standing next to a car" vs. non-relational captions, i.e. object-centric or descriptive.
+ *
+ * column positioning:                          //                          //                      !
+ *
+ * Copyright (c) 2026 by Richard C. Zulch
+ *
+ */
+
+aiMod;;                                                                     // AI module
+
+
+/*
+ * Configuration
+ *
+ */
+
+Configuration = {
+    localRootPath:      false                                               // filled in by mainInit
+    aws: {
+        credentials:    "credentials/relcap_aws.json"                       // AWS local credentials filename
+    }
+    yc: {
+        credentials:    "credentials/relcap_yc.json"                        // YC local credentials filename
+    }
+    gc: {
+        options: {
+            preview:    true
+            debug:      true
+        }
+        credentials:    "credentials/gigachat_creds.json"                   // GigaChat local credentials filename
+    }
+    oai: {
+        options: {
+        }
+        credentials:    "credentials/openai_creds.json"                     // OpenAI local credentials filename
+    }
+};;
+
+
+/*
+ * mainExecute
+ *
+ *     Execute our backend controller, which obtains status and updates our built lambdas.
+ *
+ */
+
+closure mainExecute(cloud) {
+    aiMod = require("local:ai")
+    let () {
+        printline("Execution options:")
+        printline("    hello();;                                    -- test the models")
+    }
+    true
+};;
+
+
+/*
+ * openai
+ *
+ *     Initialize OpenAI. On success this assigns the API object to the gigachat symbol.
+ *
+ */
+
+closure openai(options, error, creds, oai, data) {
+    global(backendConMod, Configuration, JSpath, aiMod)
+
+    require("local:ai/v_openai.nlg")
+    `(error, creds) = readRuntimeFile(JSpath.join(Configuration.localRootPath, Configuration.oai.credentials), "json")
+    if creds.relayHost
+        oai = aiMod.OpenAIRelay()
+    else
+        oai = aiMod.OpenAI()
+    `(error, data) = oai.login(creds.login, JSpath.join(js.d, "node_modules/openai"))
+    if error
+        error = Error("can't access OpenAI:", error)
+    list(error, oai)
+};;
+
+
+/*
+ * gigachat
+ *
+ *     Initialize Gigachat.
+ *
+ */
+
+closure gigachat(options, local error, creds, gc, data) {
+    global(backendConMod, Configuration, JSpath, aiMod)
+
+    require("local:ai/v_gigachat.nlg")
+    `(error, creds) = readRuntimeFile(JSpath.join(Configuration.localRootPath, Configuration.gc.credentials), "json")
+    // normal
+    gc = aiMod.GigaChat(options)
+    `(error, data) = gc.login(creds.login)
+    if error
+        error = Error("can't access GigaChat:", error)
+    list(error, gc)
+};;
+
+
+/*
+ * hello
+ *
+ *     Test both OpenAI and GigaChat connectivity.
+ *
+ */
+
+closure hello(local result) {
+    //
+    // testModel
+    //
+    function testModel(mproc, parmpath, local error, model, params, output) {
+        `(error, model) = mproc({ debug: true })
+        if error {
+            ErrorDebuglog("hello: ${mproc} not available", error)
+            return (list(error))
+        }
+        `(error, params) = readRuntimeFile(JSpath.join(Configuration.localRootPath, parmpath))
+        if !error
+            `(error, params) = aiMod.ParamParse(params)
+        if error {
+            ErrorDebuglog("hello: cannot access AI parameters", error)
+            return (list(error))
+        }
+        params = eval(params)
+        printline("${mproc}:")
+        `(error, output) = model.chatCompletion(params.try1)
+        if error {
+            ErrorDebuglog("hello: ${model}.chatCompletion failed:", error)
+            return (list(error))
+        }
+        printline(output.choices.0.message.content)
+        printline()
+        list(false, output)
+    }
+
+    result = { }
+    result.openai = testModel(openai, "ai/prompts/hello_openai.txt")
+    result.gigachat = testModel(gigachat, "ai/prompts/hello_gigachat.txt")
+    result
+};;
+
+
+/*
+ * mainInit
+ *
+ *     Initialize the module.
+ *
+ */
+
+function mainInit(local manifest) {
+    manifest = `(Configuration, mainExecute, mainInit, openai, gigachat, hello)
+
+    loglevel(3)
+    Naan.module.build(module.id, "main", function(modobj, compobj) {
+        compobj.manifest = manifest
+        defineLoc(`local, js.d)
+        Configuration.localRootPath = js.d.concat("")
+        require("naanlib:frameworks/common").LiveImport()
+        require("utils.nlg")
+    })
+    if "$CloudName$" == "yc"
+        mainExecute("yc")
+    else if "$CloudName$" == "aws"
+        mainExecute("aws")
+    else
+        printline("Error: Unknown Cloud: $CloudName$")
+} ();;
