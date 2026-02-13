@@ -10,137 +10,6 @@
  *
  */
 
-gigaChat;;                                                                  // gigachat API
-openai;;                                                                    // openai API
-
-
-/*
- * ParamRead
- *
- *     Read the named parameter file from the local ai/prompts folder.
- *
- */
-
-closure ParamRead(name, local path, error, data) {
-    global(js, JSpath, module)
-
-    path = JSpath.join(module.locpath, "prompts", name)
-    `(error, data) = await(js.r("fs").promises.readFile(path, { encoding: "utf8" }))
-    if error
-        list(Error("cannot read AI parameter file ${name},", error))
-    else
-        list(false, data)
-}
-
-
-/*
- * paramParse
- *
- *     Parse a parameter file that defines parameters with large amounts of text. This returns a
- * standard result tuple with a dictionary listing the named items defined within the file.
- *
- * Syntax:
- *
- * The file contains one or more parameter specifications in the following order:
- *      ===== name =====        -- the identifier for the specification
- *      <fields>                -- field definitions to pass to LLM, using { ... } syntax
- *      ----- ident ----        -- precedes each block of text with the specified identifier
- *      ================        -- uninterupted double-line terminates the spec
- * The lines with ===== or ----- must have at least 5 sequentially to be recognized
- *
- * Special line starts:
- *      # comment
- *      \# line starts with #
- *      \\ line starts with \
- *
- */
-
-function ParamParse(text, local output, lines, lineno, line, match, start, ident) {
-    global()
-
-    function parseBuffer(stext, lineo, local source, result, endtoken) {
-        stext = stext.concat(";")
-        source = new(textstream, stext)
-        try {
-            result = Dialect.parse(source)
-            endtoken = source.tokenlast()
-            if endtoken.atom != `; {                                        // didn't use all tokens
-                if !result.0
-                    result = list([])
-                result.0.push(Error("syntax error", { at: list(endtoken.loc.0+lineo, endtoken.loc.1) }))
-            }
-            result
-        } catch {
-            [Error("syntax error")]
-        }
-    }
-
-    function quoteText(text) {
-        '"'.concat(text.replace(RegExp("\"", "g"), "\\\""), '"')
-    }
-
-    output = { }
-    lines = text.split(RegExp("\r\n|\r|\n"))
-    lineno = 0
-    for line in lines {
-        ++lineno
-        if RegExp("^#").test(line)
-            continue                                                        // comment
-        if RegExp("^\\\\(#|\\\\)").test(line)
-            line = line.slice(1)                                            // not-a-comment escape
-        match = RegExp("^={5}=* (\\S+) ={5}=*$").exec(line)
-        if match {                                                          // start a spec
-            start = {
-                name: match.1
-                text: ""
-                lineno: lineno
-                idents: { }
-            }
-            if output[start.name]
-                return (list(Error("line ${lineno}: duplicate spec ${start.name}")))
-            output[start.name] = { }
-            continue
-        }
-        match = RegExp("^-{5}-* (\\S+) -{5}-*$").exec(line)
-        if match {                                                          // add a text block
-            ident = {
-                name: match.1
-                lineno: lineno
-            }
-            if start.idents[ident.name]
-                return (list(Error("line ${lineno}: duplicate block ${ident.1}")))
-            start.idents[ident.name] = ""
-            continue
-        }
-        if RegExp("^={5}=*$").test(line) {                                  // end a spec
-            if !start
-                return (list(Error("line ${lineno}: end of spec without start")))
-            let (errors, expr, error, reps, key, data) {
-                `(errors, expr) = parseBuffer("{ ${ start.text } }", start.lineno+1)
-                for `(key, data) in start.idents {
-                    `(error, data) = parseBuffer(quoteText(data), start.lineno+1)
-                    if error
-                        errors = (errors||[]).concat(error)
-                    push(list(unintern(key), data), reps)                   // unintern for symbol, not string
-                }
-                if errors
-                    return (list(errors))                                   // parse errors
-                output[start.name] = subat(expr, reps)
-            } ()
-            start = ident = false
-            continue
-        }
-        if ident
-            start.idents[ident.name] = start.idents[ident.name].concat(line, "\n")
-        else if start {
-            if line.indexOf(";") >= 0 && line.indexOf(";") == line.length-1
-                return (list(Error("line ${lineno}: invalid character in fields: ';'")))
-            start.text = start.text.concat(line, "\n")
-        }
-    }
-    list(false, output)
-};
-
 
 /*
  * aiInit
@@ -150,13 +19,11 @@ function ParamParse(text, local output, lines, lineno, line, match, start, ident
  */
 
 function aiInit(local manifest) {
-    manifest = `(ParamRead, ParamParse, aiInit)
+    manifest = `(aiInit)
 
     loglevel(3)
     Naan.module.build(module.id, "ai", function(modobj, compobj) {
         compobj.manifest = manifest
         require("naanlib:frameworks/common").LiveImport()
-        module.exports.ParamRead = ParamRead
-        module.exports.ParamParse = ParamParse
     })
 } ();

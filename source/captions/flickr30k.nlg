@@ -1,0 +1,47 @@
+/*
+ * flickr30k.nlg
+ * relation_capture
+ *
+ * Access functions for the Flickr30k dataset.
+ *
+ * column positioning:                          //                          //                      !
+ *
+ * Copyright (c) 2026 by Richard C. Zulch
+ *
+ */
+
+nodeMod;;
+
+
+/*
+ * Flickr30k
+ *
+ *     Dataset access.
+ *
+ */
+
+closure Flickr30k(dsPath, local dset) {
+    dset = new(object, this)
+
+    // finis
+    dset
+};;
+
+
+/*
+ * flickr30kInit
+ *
+ *     Initialize the component.
+ *
+ */
+
+function flickr30kInit(local manifest) {
+    manifest = `(Flickr30k, flickr30kInit)
+
+    loglevel(3)
+    Naan.module.build(module.id, "flickr30k", function(modobj, compobj) {
+        compobj.manifest = manifest
+        require("naanlib:frameworks/common").LiveImport()
+        module.exports.Flickr30k = Flickr30k
+    })
+} ();

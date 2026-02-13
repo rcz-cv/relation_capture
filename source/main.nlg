@@ -16,6 +16,7 @@
  */
 
 aiMod;;                                                                     // AI module
+captMod;;                                                                   // Captioner
 
 
 /*
@@ -25,6 +26,7 @@ aiMod;;                                                                     // A
 
 Configuration = {
     localRootPath:      false                                               // filled in by mainInit
+    flickr30kPath:      "../flickr30k/"                                     // path to Flickr30k dataset folder
     aws: {
         credentials:    "credentials/relcap_aws.json"                       // AWS local credentials filename
     }
@@ -54,10 +56,15 @@ Configuration = {
  */
 
 closure mainExecute(cloud) {
+    global(aiMod, captMod)
+
     aiMod = require("local:ai")
+    require("local:ai/prompt.nlg")
+    captMod = require("local:captions")
     let () {
         printline("Execution options:")
-        printline("    hello();;                                    -- test the models")
+        printline("    hello();;                                    -- ping the models with a simple prompt")
+        printline("    test();;                                     -- minimal test of captioning operation")
     }
     true
 };;
@@ -118,20 +125,17 @@ closure hello(local result) {
     //
     // testModel
     //
-    function testModel(mproc, parmpath, local error, model, params, output) {
+    function testModel(mproc, parmpath, local error, model, output) {
         `(error, model) = mproc({ debug: true })
         if error {
             ErrorDebuglog("hello: ${mproc} not available", error)
             return (list(error))
         }
-        `(error, params) = readRuntimeFile(JSpath.join(Configuration.localRootPath, parmpath))
-        if !error
-            `(error, params) = aiMod.ParamParse(params)
+        `(error, params) = aiMod.PromptSet().readFile(JSpath.join(Configuration.localRootPath, parmpath))
         if error {
             ErrorDebuglog("hello: cannot access AI parameters", error)
             return (list(error))
         }
-        params = eval(params)
         printline("${mproc}:")
         `(error, output) = model.chatCompletion(params.try1)
         if error {
@@ -151,6 +155,61 @@ closure hello(local result) {
 
 
 /*
+ * getLabeler
+ *
+ *     Get a labeler for the desired AI.
+ *
+ */
+
+closure getLabeler(cloud, local mproc, error, model, parmpath, params, labeler) {
+    if cloud == "yc"
+        mproc = openai
+    else if cloud == "aws"
+        mproc = gigachat
+    else
+        return(list(Error("Unknown Cloud:", cloud)))
+    `(error, model) = mproc({ debug: true })
+    if !error {
+        parmpath = JSpath.join(Configuration.localRootPath, "captions/label_${mproc}.txt")
+        `(error, params) = aiMod.PromptSet().readFile(parmpath)
+        if array(error) {
+            debuglog("parse errors in ${parmpath}:")
+            for item in error
+                debuglog("    ${item.memo} at ${item.at} ${item.found && 'found '.concat(doublequote, item.found, doublequote) || ''}")
+            error = Error("params parse error")
+        }
+        if error {
+            ErrorDebuglog("test: cannot access AI parameters", error)
+            return (list(error))
+        }
+        labeler = captMod.Labeler(Configuration.flickr30kPath, model, params)
+    }
+    if error
+        list(error)
+    else
+        list(false, labeler)
+};;
+
+
+/*
+ * test
+ *
+ *     Perform a minimal test of captioning.
+ *
+ */
+
+closure test(local error, labeler, data) {
+    `(error, labeler) = getLabeler("$CloudName$")
+    if !error
+        `(error, data) = labeler.test()
+    if error
+        printline("labeler failed: ", ErrorString(error))
+    else
+        printline(Dialect.print(data))
+};;
+
+
+/*
  * mainInit
  *
  *     Initialize the module.
@@ -158,7 +217,7 @@ closure hello(local result) {
  */
 
 function mainInit(local manifest) {
-    manifest = `(Configuration, mainExecute, mainInit, openai, gigachat, hello)
+    manifest = `(Configuration, mainExecute, mainInit, openai, gigachat, getLabeler, hello, test)
 
     loglevel(3)
     Naan.module.build(module.id, "main", function(modobj, compobj) {

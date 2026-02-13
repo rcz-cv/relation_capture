@@ -1,0 +1,368 @@
+/*
+ * prompt.nlg
+ * relation_capture
+ *
+ * Prompt management.
+ *
+ * column positioning:                          //                          //                      !
+ *
+ * Copyright (c) 2004-2026 by Richard C. Zulch
+ *
+ */
+
+
+/*
+ * PromptSet
+ *
+ * A class for managing a prompt set, which typically comes from a single file.
+ *
+ */
+
+closure PromptSet(local pros) {
+    global()
+    pros = new(object, this)
+
+    // readFile
+    //
+    // Read a prompt file at the specified path. This calls parse() and returns the result.
+    //
+    pros.readFile = closure readFile(path, local error, data) {
+        global(js)
+    
+        `(error, data) = await(js.r("fs").promises.readFile(path, { encoding: "utf8" }))
+        if error
+            list(Error("cannot read AI parameter file ${path},", error))
+        else
+            parse(data)
+    }
+
+    // parse
+    //
+    // Parse text for a prompt set, which defines any number of named prompt specifications. Each 
+    // prompt specification can include model parameters, code, and prompt text templatex with 
+    // subsitutions. Any existing prompt set is replaced. It returns a standard result tuple with a 
+    // dictionary of the prompt set. Errors are returned as an array of Error dictionaries.
+    //
+    // Syntax:
+    //
+    // The passed text contains one or more parameter specifications in the following order:
+    //      ===== name =====        -- the identifier for the prompt specification
+    //      <fields>                -- field definitions to pass to LLM, using { ... } syntax
+    //      ----- ident ----        -- precedes each block of text with the specified identifier
+    //      ================        -- uninterupted double-line terminates the spec
+    // The lines with ===== or ----- must have at least 5 sequentially to be recognized
+    //
+    // Special line starts:
+    //      # comment
+    //      \# line starts with #
+    //      \\ line starts with \
+    //
+    pros.parse = function parse(text, local output, lines, lineno, line, match, start, ident) {
+        global()
+        pros.prompts = false
+    
+        function parseBuffer(stext, lineo, local source, result, endtoken) {
+            stext = stext.concat(";")
+            source = new(textstream, stext)
+            try {
+                result = Dialect.parse(source)
+                endtoken = source.tokenlast()
+                if endtoken.atom != `; {                                        // didn't use all tokens
+                    if !result.0
+                        result = list([])
+                    result.0.push(Error("syntax error", { at: list(endtoken.loc.0+lineo, endtoken.loc.1) }))
+                }
+                result
+            } catch {
+                [Error("syntax error")]
+            }
+        }
+    
+        function quoteText(text) {
+            '"'.concat(text.replace(RegExp("\"", "g"), "\\\""), '"')
+        }
+    
+        output = { }
+        lines = text.split(RegExp("\r\n|\r|\n"))
+        lineno = 0
+        for line in lines {
+            ++lineno
+            if RegExp("^#").test(line)
+                continue                                                        // comment
+            if RegExp("^\\\\(#|\\\\)").test(line)
+                line = line.slice(1)                                            // not-a-comment escape
+            match = RegExp("^={5}=* (\\S+) ={5}=*$").exec(line)
+            if match {                                                          // start a spec
+                start = {
+                    name: match.1
+                    text: ""
+                    lineno: lineno
+                    idents: { }
+                }
+                if output[start.name]
+                    return (list(Error("line ${lineno}: duplicate spec ${start.name}")))
+                output[start.name] = { }
+                continue
+            }
+            match = RegExp("^-{5}-* (\\S+) -{5}-*$").exec(line)
+            if match {                                                          // add a text block
+                ident = {
+                    name: match.1
+                    lineno: lineno
+                }
+                if start.idents[ident.name]
+                    return (list(Error("line ${lineno}: duplicate block ${ident.1}")))
+                start.idents[ident.name] = ""
+                continue
+            }
+            if RegExp("^={5}=*$").test(line) {                                  // end a spec
+                if !start
+                    return (list(Error("line ${lineno}: end of spec without start")))
+                let (errors, expr, error, reps, key, data) {
+                    `(errors, expr) = parseBuffer("{ ${ start.text } }", start.lineno+1)
+                    for `(key, data) in start.idents {
+                        `(error, data) = parseBuffer(quoteText(data), start.lineno+1)
+                        if error
+                            errors = (errors||[]).concat(error)
+                        push(list(unintern(key), data), reps)                   // unintern for symbol, not string
+                    }
+                    if errors
+                        return (list(errors))                                   // parse errors
+                    output[start.name] = subat(expr, reps)
+                } ()
+                start = ident = false
+                continue
+            }
+            if ident
+                start.idents[ident.name] = start.idents[ident.name].concat(line, "\n")
+            else if start {
+                if line.indexOf(";") >= 0 && line.indexOf(";") == line.length-1
+                    return (list(Error("line ${lineno}: invalid character in fields: ';'")))
+                start.text = start.text.concat(line, "\n")
+            }
+        }
+        pros.prompts = output
+        output = eval(output)
+        list(false, output)
+    }
+    
+    // nameList
+    //
+    // Return the list of our prompts.
+    //
+    pros.nameList = function nameList() {
+        pros.prompts.*
+    }
+    
+    // prompt
+    //
+    // Return a prompt object for the model and named prompt, or false if the name does not exist.
+    //
+    pros.prompt = function prompt(model, name) {
+        if pros.prompts[name]
+            Prompt(model, pros.prompts[name])
+    }
+    
+    // finis
+    pros
+};
+
+
+/*
+ * Prompt
+ *
+ * A class for managing a prompt specification.
+ *
+ */
+
+closure Prompt(model, params, local prot) {
+    global()
+    prot = new(object, this)
+    prot.service = model.info().service
+    prot.usage = {
+        service: prot.service
+        models: { }
+    }
+
+    // callProc
+    //
+    // Call a procedure defined in the prompt set:
+    //
+    //     callProc(procname, ...args...)
+    //
+    prot.callProc = closure callProc args {
+        function cpips(procname, arglist, local result) {
+            if !params[procname]
+                debuglog("Prompt.callProc: warning: ${procname} is undefined")
+            try {
+                result = apply(enclose(params[procname]), arglist)
+                if tuple(result)
+                    result
+                else
+                    list(false, result)
+            } catch {
+                list(Error("${procname} failed:", exception))
+            }
+        } (pop(args), args)
+    }
+
+    // query
+    //
+    // Perform an AI query for the specified prompt paramters, returning the response as a dictionary
+    // in a result tuple (error, response, request). This is stateless and may and may be called
+    // repeatedly.
+    //
+    // options:
+    //  {
+    //      <key>:          <value>             // substitutions to make in params
+    //  }
+    //
+    prot.query = closure query(text, options, local error, response) {
+        //
+        // validate params
+        //
+        if !dictionary(params.prompt)
+            return (list(Error("invalid prompt")))
+        else if !tuple(params.pre_format)
+            return (list(Error("invalid pre_format")))
+        else if !tuple(params.post_parse)
+            return (list(Error("invalid post_parse")))
+        //
+        // pre-processing
+        //
+        `(error, text) = callProc(params, `pre_format, text)
+        if error
+            return (list(error))
+        //
+        // substitute in params
+        //
+        let (subs, reps, key, data) {
+            subs = merge(options, { text: text })
+            for `(key, data) in subs
+                push(list(unintern(key), data), reps)
+            params = eval(subat(params, reps))
+        }()
+        //
+        // query the model
+        //
+        `(error, response) = model.chatCompletion(params.prompt)
+        if error
+            error = Error("${params.prompt.model}.chatCompletion failed:", error)
+        else {
+            usageAddModel(model, response.usage)
+            if !(response.choices.length >= 1) || response.choices.0.finish_reason != "stop"
+                error = Error("AI failed: ${params.prompt.model}.chatCompletion gave ${response.choices.length} "
+                    "choices with finish_reason ${response.choices.0.finish_reason}",
+                    { finish_reason: response.choices.0.finish_reason })
+            else if response.choices.length > 1
+                debuglog("Prompt.query warning: ${params.prompt.model}.chatCompletion gave ${response.choices.length} choices")
+        }
+        if error
+            ErrorDebuglog("Prompt.query:", error)
+        list(error, response, params.prompt)
+    }
+
+    // usageBegin
+    //
+    // Return a (token) usage dictionary structure reflecting current resource consumption. Pass this
+    // in a call to usageEnd below to obtain the delta resource consumption.
+    //
+    // The structure is:
+    //  {
+    //      service:                            <string>                    // name of the AI service
+    //      date:                               <integer>                   // timestamp
+    //      models: {
+    //          <model>: {                                                  // name of the model
+    //              prompt_tokens:              <integer>                   // tokens charged for the prompt
+    //              completion_tokens:          <integer>                   // tokens charged for the output
+    //              total_tokens:               <integer>                   // total tokens charged
+    //          }
+    //          <model>: {
+    //              ...
+    //          }
+    //      }
+    //  }
+    //
+    prot.usageBegin = function usageBegin() {
+        new(prot.usage)
+    }
+
+    // usageAdjust
+    //
+    // Add or subtract values in a usage dictionary, returning a new one. Sign should be 1 or -1.
+    // Values for each model are kept separate, in case more than one is used. The output dictionary
+    // includes each model that has a non-zero result, where a non-existent model is counted as zero.
+    //
+    function usageAdjust(end, begin, sign, local allkeys, output, modkey) {
+        // add or subtract two values, default zero if not defined
+        function deltaOne(left, right) {
+            (left || 0) + (right || 0) * sign
+        }
+
+        // addTokens - add or subtract tokens
+        function deltaTokens(left, right, local out) {
+            out = {
+                prompt_tokens:      deltaOne(left.prompt_tokens, right.prompt_tokens)
+                completion_tokens:  deltaOne(left.completion_tokens, right.completion_tokens)
+                total_tokens:       deltaOne(left.total_tokens, right.total_tokens)
+            }
+            if out == { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 }
+                undefined
+            else
+                out
+        }
+
+        allkeys = new(end.models)
+        begin.models.*.toarray.forEach(function(item) { allkeys[item] = true })
+        output = {
+            date: Date.now()
+            service: prot.service
+            models: { }
+        }
+        for modkey in allkeys
+            output.models[modkey] = deltaTokens(end.models[modkey], begin.models[modkey])
+        output
+    }
+
+    // usageAddModel
+    //
+    // Add tokens for the specified model.
+    //
+    function usageAddModel(modelname, tokens, local delta) {
+        delta = { models: { } }
+        delta.models[modelname] = tokens
+        prot.usage = usageAdjust(prot.usage, delta, 1)
+        tokens
+    }
+
+    // usageEnd
+    //
+    // Calculate (token) usage since the specified usage dictionary was created, returning a new
+    // dictionary with the results.
+    //
+    prot.usageEnd = function usageEnd(usage) {
+        usageAdjust(prot.usage, usage, -1)
+    }
+
+    // finis
+    prot
+};
+
+
+/*
+ * promptInit
+ *
+ *     Initialize the component.
+ *
+ */
+
+function promptInit(local manifest) {
+    manifest = `(PromptSet, Prompt, promptInit)
+
+    loglevel(3)
+    Naan.module.build(module.id, "prompt", function(modobj, compobj) {
+        compobj.manifest = manifest
+        require("naanlib:frameworks/common").LiveImport()
+        module.exports.PromptSet = PromptSet
+    })
+} ();
