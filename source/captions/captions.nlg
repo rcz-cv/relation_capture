@@ -10,71 +10,9 @@
  *
  */
 
+nodeMod;;
+csvMod;;
 
-/*
- * Flickr30k
- *
- *     Dataset access
-
-    // readLines
-    //
-    // Read the contents of a file into an array of lines with the following options:
-    //      pattern:                            -- only return lines matching pattern
-    //      fixed                               -- pattern is a fixed string, not a regular expression
-    //      ignoreCase:                         -- ignore case during match
-    //      invert:                             -- return lines that DO NOT match the regex
-    //      returnText:                         -- return text of matched lines
-    //
-
-    files.readLines = closure readLines(path, options, callback,
-        local localpath, error, instream, pattern, matchRE, liner, lines, lineno) {
-        if !callback
-            return (syncAdapter(readLines, path, options))
-        `(error, localpath) = localPath(path)
-        if error
-            return (asyncResult(callback, error))
-        instream = fs.createReadStream(localpath)
-        instream.on("error", function (err) {
-            callback(Error("stream failed:", localpath, err))
-        })
-        liner = NodeStreamLiner()
-        instream.pipe(liner)
-        liner.on("end", function() {
-            callback(false, lines)
-        })
-        lines = []
-        if options.pattern {
-            pattern = options.pattern
-            if options.fixed
-                pattern = pattern.replace(RegExp("\\.|\\0|\\\\|\\[|\\||\\(|\\*|\\+|\\?|\\{"), function(match) {
-                    "\\".concat(match)                                      // escape all special RegExp characters
-                })
-            try {
-                if options.ignoreCase
-                    matchRE = RegExp(pattern, "i")
-                else
-                    matchRE = RegExp(pattern)
-            } catch {
-                if true
-                    return (callback(Error("search expression error", exception)))
-            }
-            lineno = 0
-            liner.on("readable", function (local line, matched) {
-                while (line = liner.read()) {
-                    ++lineno
-                    matched = matchRE.test(line)
-                    if matched && !options.invert || !matched && options.invert
-                        if options.returnText
-                            lines.push([lineno, line])
-                        else
-                            lines.push(lineno) }
-            })
-        } else
-            liner.on("readable", function (local line) {
-                while (line = liner.read())
-                    lines.push(line)
-            })
-    }
 
 /*
  * Labeler
@@ -83,8 +21,10 @@
  *
  */
 
-closure Labeler(dsPath, model, params, local laber) {
+closure Labeler(dsPath, model, prompts, local laber) {
+    global(JSpath, csvMod)
     laber = new(object, this)
+    laber.prompt = prompts.prompt(model, "label")
 
     // label
     //
@@ -111,8 +51,29 @@ closure Labeler(dsPath, model, params, local laber) {
     // test
     //
     // Test that the labeler is working by labeling the first sample.
-    laber.label = function test() {
-        
+    //
+    laber.test = function test(local annopath, reader, error, line, header, sample, sentences, response) {
+        annopath = JSpath.join(dsPath, "flickr_annotations_30k.csv")
+        reader = LineReader(annopath, {
+            firstLine: 0                                                    // header
+            lastLine: 1                                                     // first sample
+        })
+        `(error, line) = reader.readline()
+        if !error
+            header = csvMod.csvParse(line).0
+        if !error
+            `(error, line) = reader.readline()
+        if !error {
+            sample = csvMod.csvParse(line).0
+            sentences = JSONparse(sample.0)
+        }
+        `(error, response) = laber.prompt.query({
+            captions: sentences
+        })
+        if error
+            list(error)
+        else
+            list(false, response)
     }
 
     // finis
@@ -134,5 +95,9 @@ function captionsInit(local manifest) {
     Naan.module.build(module.id, "captions", function(modobj, compobj) {
         compobj.manifest = manifest
         require("naanlib:frameworks/common").LiveImport()
+        nodeMod = require("naanlib:frameworks/node")
+        csvMod = require("naanlib:frameworks/storage/csv.nlg")
+        require("liners.nlg")
+        module.exports.Labeler = Labeler
     })
 } ();

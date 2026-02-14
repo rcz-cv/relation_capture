@@ -53,10 +53,10 @@ Return ONLY strict JSON (no markdown, no extra text) with keys:
 Label the following image-caption set as RELATIONAL true/false using the definition and decision rule.
 
 Captions (5):
-1) {caption_1}
-2) {caption_2}
-3) {caption_3}
-4) {caption_4}
-5) {caption_5}
+1) ${captions.0}
+2) ${captions.1}
+3) ${captions.2}
+4) ${captions.3}
+5) ${captions.4}
 
 ===================================

@@ -10,22 +10,30 @@
  *
  */
 
-nodeMod;;
-
 
 /*
  * LineReader
  *
  * Read lines from a file asynchronously in order. This starts pre-reading right away.
  *
+ * Options:
+ *  {
+ *      firstLine: false || <integer>           // first line to return, from zero
+ *      lastLine: false || <integer>            // last line to return, from zero
+ *  }
+ *
  */
 
-closure LineReader(path, options, local lread, instream, liner, lines, preread, readable) {
+closure LineReader(path, options, local lread, instream, liner, lines, lineno, preread, readable) {
+    global(js, nodeMod)
     lread = new(object, this)
     options = merge({
         lowReadStart: 50
         highReadStop: 200
+        firstLine: false
+        lastLine: false
     }, options)
+    lineno = 0
     preread = new(nonce)
     preread.signal()
     readable = new(nonce)
@@ -38,6 +46,8 @@ closure LineReader(path, options, local lread, instream, liner, lines, preread, 
     //  (false, line)       // the next line as a string
     //  (false, false)      // there are no more lines and no errors
     //  (error)             // there are no more lines and an error occurred
+    //
+    // The reader is closed automatically when the entire file is read.
     //
     lread.readline = closure readline() {
         if lines.length < options.lowReadStart
@@ -53,32 +63,54 @@ closure LineReader(path, options, local lread, instream, liner, lines, preread, 
         list (false, lines.shift())
     }
 
+    // linenumber
+    //
+    // Return the line number of the next line to be read, starting from zero.
+    //
+    lread.linenumber = function linenumber() {
+        lineno - lines.length
+    }
+
     // open
     //
     // Open the file for reading, returning a standard result tuple. Errors are reported later.
     //
     closure open() {
-        instream = await(js.r("fs").createReadStream(path))
+        instream = js.r("fs").createReadStream(path)
         instream.on("error", function (err) {
             lread.failed = Error("stream failed:", path, err)
+            instream.destroy()
+            liner.destroy()
             readable.signal()
         })
         liner = nodeMod.NodeStreamLiner()
         instream.pipe(liner)
-        liner.on("end", function() {
+        liner.on("end", function() {                                        // liner destroyed when "end" emitted
             lread.completed = true
             readable.signal()
         })
         lines = []
         liner.on("readable", function (local line) {
-            wait(preread)
-            while (line = liner.read())
-                lines.push(line)
-            readable.signal()
+            if lread.completed
+                return
+            preread.wait()
+            while (line = liner.read()) {
+                if !options.firstLine || lineno >= options.firstLine {
+                    lines.push(line)
+                    readable.signal()
+                }
+                ++lineno
+                if options.lastLine && lineno > options.lastLine {
+                    lread.completed = true                                  // we choose to stop early
+                    instream.destroy()                                      // explicit release resources
+                    liner.destroy()
+                    readable.signal()
+                    return
+                }
+            }
             if lines.length >= options.highReadStop
                 preread.reset()
         })
-        list(false, { ok: true })
     }()
 
     // finis
@@ -90,102 +122,111 @@ closure LineReader(path, options, local lread, instream, liner, lines, preread, 
  * LineWriter
  *
  * Write lines to a file asynchronously in order.
- * ###########################################################################
  *
+ * Options:
+ *  {
+ *      encoding: <string>                      // default "utf8"
+ *      flags: <string>                         // default "w"
+ *      eol: <string> | false                   // default "\n"
+ *  }
+ *
+ */
 
-closure LineWriter(path, options, local lwrite, outstream, lines, preread, readable) {
+closure LineWriter(path, options, local lwrite, lineno, writable, done, outstream) {
+    global(js)
     lwrite = new(object, this)
     options = encoding({
         encoding: "utf8"
         flags: "w"
+        eol: "\n"
     }, options)
+    lineno = 0
+    writable = new(nonce)
+    writable.signal()
+    done = new(nonce)
 
-    // write
+    // writeline
     //
-    // Write a line to the stream.
+    // Write a line to the stream, returning a result tuple with the line number.
+    //
+    // If no error occurs then call close() to flush and release resources.
+    //
+    closure writeline(line) {
+        loop {
+            writable.wait()
+            if lwrite.failed
+                return (list(lwrite.failed))
+            if options.eol
+                line = line.concat(options.eol)
+            if outstream.write(line)
+                break                                               // could take the line now
+            writable.reset()                                        // wait for "drain" or "error"
+        }
+        list(false, lineno++)
+    }
+
+    // close
+    //
+    // Close the output file and return a result tuple with the line count.
+    //
+    lwrite.close = function close() {
+        if !lwrite.failed {
+            outstream.end()
+            done.wait()                                             // wait for "finish" or "error"
+        }
+        if lwrite.failed
+            list(lwrite.failed)                                     // failed, possibly during .end()
+        else
+            list(false, lineno)
+    }
+
+    // linenumber
+    //
+    // Return the line count so far, starting from zero.
+    //
+    lwrite.linenumber = function linenumber() {
+        lineno
+    }
+
     // open
     //
     // Open the file for reading, returning a standard result tuple. Errors are reported later.
     //
     closure open() {
-        outstream = await(js.r("fs").createWriteStream(path, { flags: options.flags });
+        outstream = js.r("fs").createWriteStream(path, { flags: options.flags })
         outstream.on("error", function (err) {
             lwrite.failed = Error("stream failed:", path, err)
+            outstream.destroy()
+            writable.signal()
+            done.signal()
         })
-        lines = []
-        liner.on("drain", function (local line) {
+        outstream.on("drain", function () {
+            writable.signal()
         })
-        liner.on("finish", function () {
-        }
-        list(false, { ok: true })
-    }
+        outstream.on("finish", function () {
+            done.signal()
+        })
+    }()
 
     // finis
     lwrite
-}
-
-    
-    // writeFile
-    //
-    // Write a string to the specified file, with the following options:
-    //      md5: <hash>             -- existing file content must match hash to overwrite
-    //      encoding: <type>        -- default utf8
-    // The non-error result is a dictionary containing the new file contents hash.
-    
-    files.writeFile = closure writeFile(path, data, options, callback, local error, localpath, nodeOptions, md5data, pending, result) {
-        if !callback
-            return (syncAdapter(writeFile, path, data, options))
-        `(error, localpath) = localPath(path)
-        if error
-            return (asyncResult(callback, error))
-        nodeOptions = { encoding: "utf8" }
-        if options.encoding
-            nodeOptions.encoding = options.encoding
-        md5data = HashMD5(data)
-        if options.md5 {                                                    // read file to verify it is unchanged
-            pending = new(nonce)
-            fs.readFile(localpath, nodeOptions, function(err, strdata) {
-                if err.code == "ENOENT"
-                    result = false                                          // no file to check
-                else
-                    result = HashMD5(strdata)
-                pending.signal(result)
-            })
-            result = pending.wait()                                         // result is existing hash, or false if none
-            if result && options.md5 != result {                            // current contents don't match check
-                if md5data == result
-                    return (callback(false, { md5: md5data }))              // but, oddly, current contents match data
-                else
-                    return (callback(Error("existing file match failed:", { // someone beat us to the write
-                        path: localpath
-                        current: result
-                        check: options.md5
-                    }))) } }
-        fs.writeFile(localpath, data, nodeOptions, function (err) {
-            if err
-                callback(Error("fs.writeFile failed:", localpath, err))
-            else
-                callback(false, { md5: md5data })
-        })
-    }
- */
+};
 
 
 /*
- * captionsInit
+ * linersInit
  *
  *     Initialize the component.
  *
  */
 
-function captionsInit(local manifest) {
-    manifest = `(Labeler, captionsInit)
+function linersInit(local manifest) {
+    manifest = `(LineReader, LineWriter, linersInit)
 
     loglevel(3)
     Naan.module.build(module.id, "liners", function(modobj, compobj) {
         compobj.manifest = manifest
-        require("naanlib:frameworks/common").LiveImport()
-        nodeMod = require("naanlib:frameworks/node")
+        require("captions.nlg")
         module.exports.LineReader = LineReader
         module.exports.LineWriter = LineWriter
     })

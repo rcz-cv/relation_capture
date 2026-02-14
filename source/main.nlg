@@ -26,7 +26,7 @@ captMod;;                                                                   // C
 
 Configuration = {
     localRootPath:      false                                               // filled in by mainInit
-    flickr30kPath:      "../flickr30k/"                                     // path to Flickr30k dataset folder
+    flickr30kPath:      "../../../flickr30k/"                               // path to Flickr30k dataset folder
     aws: {
         credentials:    "credentials/relcap_aws.json"                       // AWS local credentials filename
     }
@@ -65,7 +65,7 @@ closure mainExecute(cloud) {
         printline("Execution options:")
         printline("    hello();;                                    -- ping the models with a simple prompt")
         printline("    test();;                                     -- minimal test of captioning operation")
-    }
+    }()
     true
 };;
 
@@ -161,7 +161,7 @@ closure hello(local result) {
  *
  */
 
-closure getLabeler(cloud, local mproc, error, model, parmpath, params, labeler) {
+closure getLabeler(cloud, local mproc, error, model, parmpath, prompts, datapath, labeler) {
     if cloud == "yc"
         mproc = openai
     else if cloud == "aws"
@@ -171,18 +171,20 @@ closure getLabeler(cloud, local mproc, error, model, parmpath, params, labeler) 
     `(error, model) = mproc({ debug: true })
     if !error {
         parmpath = JSpath.join(Configuration.localRootPath, "captions/label_${mproc}.txt")
-        `(error, params) = aiMod.PromptSet().readFile(parmpath)
+        prompts = aiMod.PromptSet()
+        `(error) = prompts.readFile(parmpath)
         if array(error) {
             debuglog("parse errors in ${parmpath}:")
             for item in error
                 debuglog("    ${item.memo} at ${item.at} ${item.found && 'found '.concat(doublequote, item.found, doublequote) || ''}")
-            error = Error("params parse error")
+            error = Error("prompts parse error")
         }
         if error {
             ErrorDebuglog("test: cannot access AI parameters", error)
             return (list(error))
         }
-        labeler = captMod.Labeler(Configuration.flickr30kPath, model, params)
+        datapath = JSpath.join(Configuration.localRootPath, Configuration.flickr30kPath)
+        labeler = captMod.Labeler(datapath, model, prompts)
     }
     if error
         list(error)
@@ -203,9 +205,9 @@ closure test(local error, labeler, data) {
     if !error
         `(error, data) = labeler.test()
     if error
-        printline("labeler failed: ", ErrorString(error))
+        list(error)
     else
-        printline(Dialect.print(data))
+        list(false, data)
 };;
 
 

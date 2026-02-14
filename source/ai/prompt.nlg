@@ -217,45 +217,34 @@ closure Prompt(model, params, local prot) {
     //      <key>:          <value>             // substitutions to make in params
     //  }
     //
-    prot.query = closure query(text, options, local error, response) {
+    prot.query = closure query(options, local error, sparams, response) {
         //
         // validate params
         //
-        if !dictionary(params.prompt)
+        if !string(params.model) || params.model == ""
             return (list(Error("invalid prompt")))
-        else if !tuple(params.pre_format)
-            return (list(Error("invalid pre_format")))
-        else if !tuple(params.post_parse)
-            return (list(Error("invalid post_parse")))
-        //
-        // pre-processing
-        //
-        `(error, text) = callProc(params, `pre_format, text)
-        if error
-            return (list(error))
         //
         // substitute in params
         //
-        let (subs, reps, key, data) {
-            subs = merge(options, { text: text })
-            for `(key, data) in subs
+        let (reps, key, data) {
+            for `(key, data) in options
                 push(list(unintern(key), data), reps)
-            params = eval(subat(params, reps))
+            sparams = eval(subat(params, reps))
         }()
         //
         // query the model
         //
-        `(error, response) = model.chatCompletion(params.prompt)
+        `(error, response) = model.chatCompletion(sparams)
         if error
-            error = Error("${params.prompt.model}.chatCompletion failed:", error)
+            error = Error("${sparams.prompt.model}.chatCompletion failed:", error)
         else {
             usageAddModel(model, response.usage)
             if !(response.choices.length >= 1) || response.choices.0.finish_reason != "stop"
-                error = Error("AI failed: ${params.prompt.model}.chatCompletion gave ${response.choices.length} "
+                error = Error("AI failed: ${sparams.prompt.model}.chatCompletion gave ${response.choices.length} "
                     "choices with finish_reason ${response.choices.0.finish_reason}",
                     { finish_reason: response.choices.0.finish_reason })
             else if response.choices.length > 1
-                debuglog("Prompt.query warning: ${params.prompt.model}.chatCompletion gave ${response.choices.length} choices")
+                debuglog("Prompt.query warning: ${sparams.prompt.model}.chatCompletion gave ${response.choices.length} choices")
         }
         if error
             ErrorDebuglog("Prompt.query:", error)
