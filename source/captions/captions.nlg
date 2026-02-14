@@ -30,33 +30,56 @@ closure Labeler(dsPath, model, prompts, local laber) {
     //
     // Analyze a single sample for its degree of relational semantics.
     //
-    // The sample should be a dictionary containing at least:
+    // The sample should be an array of columns:
     //
     //  {
-    //      img_id                              // a sample identifier integer, starting with zero
+    //      sentences[5]                        // an array of 5 sentence strings
     //      sentids[]                           // an array of 5 sentence identifier integers, starting with zero
-    //      sentences[]                         // an array of 5 sentence strings
+    //      group                               // train / test / verify
+    //      filename                            // image filename
+    //      img_id                              // a sample identifier integer, starting with zero
     //  }
     //
-    // And the result will be:
+    // And the result will be the same with an additional field containing this dictionary:
     //
     //  {
-    //      ...
+    //      relational  : true,
+    //      confidence  : 0.74,
+    //      reason_codes: ["spatial", "interaction"],
+    //      evidence    : [ "An elderly woman is eating a burger while the man next to her touching his hat.",
+    //                      "Two older women sit at a table with two coolers in front of them."]
     //  }
     //
-    laber.label = closure label(sample, params) {
-        
+    closure label(line, local sample, error, sentences, response, relate) {
+        sample = csvMod.csvParse(line).0                                    // sample is array of 5 columns
+        `(error, sentences) = JsonParse(sample.0)
+        if !error
+            `(error, response) = laber.prompt.query({
+                captions: sentences
+            })
+        if !error {
+            `(error, relate) = JsonParse(response.choices.0.message.content)
+            if !error
+                sample.push(new(relate))
+        }
+        if error
+            list(error)
+        else
+            list(false, response, sample)                                   // sample is array of 6 columns
     }
     
     // test
     //
     // Test that the labeler is working by labeling the first sample.
     //
-    laber.test = function test(local annopath, reader, error, line, header, sample, sentences, response) {
+    laber.test = function test(lineid,
+        local annopath, reader, error, line, header, response, sample) {
+        if !lineid
+            lineid = 0
         annopath = JSpath.join(dsPath, "flickr_annotations_30k.csv")
         reader = LineReader(annopath, {
-            firstLine: 0                                                    // header
-            lastLine: 1                                                     // first sample
+            firstLine: lineid                                               // header
+            lastLine: lineid+1                                              // first sample
         })
         `(error, line) = reader.readline()
         if !error
@@ -64,16 +87,58 @@ closure Labeler(dsPath, model, prompts, local laber) {
         if !error
             `(error, line) = reader.readline()
         if !error {
-            sample = csvMod.csvParse(line).0
-            sentences = JSONparse(sample.0)
+            if line
+                `(error, response, sample) = label(line)
+            else
+                response = sample = false
         }
-        `(error, response) = laber.prompt.query({
-            captions: sentences
-        })
         if error
             list(error)
         else
-            list(false, response)
+            list(false, response, sample)
+    }
+    
+    // convert
+    //
+    // Convert the line range to an ouput file.
+    //
+    laber.convert = function convert(outpath, firstLine, lastLine,
+        local annopath, reader, writer, error, line, header, response, sample, data) {
+        annopath = JSpath.join(dsPath, "flickr_annotations_30k.csv")
+        reader = LineReader(annopath, {
+            firstLine: firstLine                                            // header
+            lastLine: lastLine                                              // first sample
+        })
+        writer = LineWriter(outpath, {
+            eol: ""
+        })
+        `(error, line) = reader.readline()
+        if !error
+            header = csvMod.csvParse(line).0
+        printline("---")
+        while !error {
+            `(error, line) = reader.readline()
+            if error
+                break
+            if line
+                `(error, response, sample) = label(line)
+            else
+                break
+            if !error 
+                `(error, data) = JsonStringify(sample.5)
+            if !error {
+                sample.5 = data
+                line = csvMod.csvPrint([sample])
+                writer.writeline(line)
+                print("+")
+            }
+        }
+        writer.close()
+        printline("---")
+        if error
+            list(error)
+        else
+            list(false, writer.linenumber())
     }
 
     // finis

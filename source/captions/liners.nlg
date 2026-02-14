@@ -135,7 +135,7 @@ closure LineReader(path, options, local lread, instream, liner, lines, lineno, p
 closure LineWriter(path, options, local lwrite, lineno, writable, done, outstream) {
     global(js)
     lwrite = new(object, this)
-    options = encoding({
+    options = merge({
         encoding: "utf8"
         flags: "w"
         eol: "\n"
@@ -151,7 +151,7 @@ closure LineWriter(path, options, local lwrite, lineno, writable, done, outstrea
     //
     // If no error occurs then call close() to flush and release resources.
     //
-    closure writeline(line) {
+    lwrite.writeline = closure writeline(line) {
         loop {
             writable.wait()
             if lwrite.failed

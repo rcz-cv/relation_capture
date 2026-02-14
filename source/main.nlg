@@ -64,7 +64,8 @@ closure mainExecute(cloud) {
     let () {
         printline("Execution options:")
         printline("    hello();;                                    -- ping the models with a simple prompt")
-        printline("    test();;                                     -- minimal test of captioning operation")
+        printline("    test()                                       -- minimal test of captioning operation")
+        printline("    convert(firstLine, lastLine)                 -- convert range of samples to output")
     }()
     true
 };;
@@ -176,7 +177,7 @@ closure getLabeler(cloud, local mproc, error, model, parmpath, prompts, datapath
         if array(error) {
             debuglog("parse errors in ${parmpath}:")
             for item in error
-                debuglog("    ${item.memo} at ${item.at} ${item.found && 'found '.concat(doublequote, item.found, doublequote) || ''}")
+                debuglog("    ", item.memo, "at", item.at, item.found && 'found '.concat(doublequote, item.found, doublequote) || '')
             error = Error("prompts parse error")
         }
         if error {
@@ -200,14 +201,33 @@ closure getLabeler(cloud, local mproc, error, model, parmpath, prompts, datapath
  *
  */
 
-closure test(local error, labeler, data) {
+closure test(lineid, local error, labeler, response, sample) {
     `(error, labeler) = getLabeler("$CloudName$")
     if !error
-        `(error, data) = labeler.test()
+        `(error, response, sample) = labeler.test(lineid)
     if error
         list(error)
     else
-        list(false, data)
+        list(false, response, sample)
+};;
+
+
+/*
+ * convert
+ *
+ * Convert a range of samples from the dataset to have the extra info.
+ *
+ */
+
+closure convert(firstLine, lastLine, local error, labeler, outpath, count) {
+    `(error, labeler) = getLabeler("$CloudName$")
+    outpath = JSpath.join(Configuration.localRootPath, "augmented_$CloudName$.csv")
+    if !error
+        `(error, count) = labeler.convert(outpath, firstLine, lastLine)
+    if error
+        list(error)
+    else
+        list(false, count)
 };;
 
 
@@ -219,7 +239,7 @@ closure test(local error, labeler, data) {
  */
 
 function mainInit(local manifest) {
-    manifest = `(Configuration, mainExecute, mainInit, openai, gigachat, getLabeler, hello, test)
+    manifest = `(Configuration, mainExecute, mainInit, openai, gigachat, getLabeler, hello, test, convert)
 
     loglevel(3)
     Naan.module.build(module.id, "main", function(modobj, compobj) {
