@@ -59,8 +59,10 @@ closure Labeler(dsPath, model, prompts, local laber) {
             })
         if !error {
             `(error, relate) = JsonParse(response.choices.0.message.content)
-            if !error
-                sample.push(new(relate))
+            if !error {
+                sample.push(tostring(relate.relational).toLowerCase())      // "true" or "false"
+                sample.push(relate)
+            }
         }
         if error
             list(error)
@@ -103,7 +105,7 @@ closure Labeler(dsPath, model, prompts, local laber) {
     // Convert the line range to an ouput file.
     //
     laber.convert = function convert(outpath, firstLine, lastLine,
-        local annopath, reader, writer, error, line, header, response, sample, data) {
+        local annopath, reader, writer, error, line, header, batchSize, batch, results) {
         annopath = JSpath.join(dsPath, "flickr_annotations_30k.csv")
         reader = LineReader(annopath, {
             firstLine: firstLine                                            // header
@@ -113,28 +115,45 @@ closure Labeler(dsPath, model, prompts, local laber) {
             eol: ""
         })
         `(error, line) = reader.readline()
-        if !error
+        if !error {
             header = csvMod.csvParse(line).0
-        printline("---")
+            `(error) = writer.writeline(csvMod.csvPrint([header]))
+        }
+        printline("\n---")
+        batchSize = 1000
         while !error {
-            `(error, line) = reader.readline()
-            if error
-                break
-            if line
-                `(error, response, sample) = label(line)
-            else
-                break
-            if !error 
-                `(error, data) = JsonStringify(sample.5)
-            if !error {
-                sample.5 = data
-                line = csvMod.csvPrint([sample])
-                writer.writeline(line)
-                print("+")
+            batch = []
+            while batch.length < batchSize {
+                `(error, line) = reader.readline()
+                if error
+                    break
+                if line
+                    batch.push(line)
+                else
+                    break
             }
+            if batch.length == 0
+                break
+            results = asyncArray(batch, 100, closure label1(entry, index, cancel,
+                local error, response, sample, data, line) {
+                `(error, response, sample) = label(entry)
+                if !error 
+                    `(error, data) = JsonStringify(sample.6)
+                if !error {
+                    sample.6 = data
+                    line = csvMod.csvPrint([sample])
+                }
+                if error
+                    ErrorString(error)
+                else
+                    line
+            }).wait()
+            while results.length > 0
+                writer.writeline(results.shift())
+            print("+")
         }
         writer.close()
-        printline("---")
+        printline("\n---")
         if error
             list(error)
         else

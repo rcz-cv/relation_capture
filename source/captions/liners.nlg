@@ -152,16 +152,13 @@ closure LineWriter(path, options, local lwrite, lineno, writable, done, outstrea
     // If no error occurs then call close() to flush and release resources.
     //
     lwrite.writeline = closure writeline(line) {
-        loop {
-            writable.wait()
-            if lwrite.failed
-                return (list(lwrite.failed))
-            if options.eol
-                line = line.concat(options.eol)
-            if outstream.write(line)
-                break                                               // could take the line now
-            writable.reset()                                        // wait for "drain" or "error"
-        }
+        writable.wait()
+        if lwrite.failed
+            return (list(lwrite.failed))
+        if options.eol
+            line = line.concat(options.eol)
+        if !outstream.write(line)
+            writable.reset()                                        // next: wait for "drain" or "error"
         list(false, lineno++)
     }
 
