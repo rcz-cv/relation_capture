@@ -19,7 +19,7 @@
  */
 
 closure OpenAI(local opail) {
-    global(js)
+    global(js, common)
     opail = new(object, this)
 
     // install
@@ -102,6 +102,10 @@ closure OpenAI(local opail) {
         }
     }
 
+    //
+    // retrier -- backoff and retry selected errors
+    //
+
     // chatCompletion
     //
     // Perform a chat completion using the specified parameters.
@@ -115,13 +119,28 @@ closure OpenAI(local opail) {
     //     [Top_p:          <float>]
     //  }
     //
-    opail.chatCompletion = closure chatCompletion(params, local error, data) {
+    opail.chatCompletion = closure chatCompletion(params, local delayf, error, data) {
+
+        function retrier(error, headers, local waitms) {
+            if member(error.status, `(408, 429, 500, 502, 503, 504)) {      // retriable errors
+                if !delayf
+                    delayf = common.ExbackFactory(6,15)                     // 6s max backoff, 15s deadline
+                waitms = delayf()
+                if waitms                                                   // return false to give up
+                    sleep(waitms)                                           // return true from sleep to retry
+            }
+        }
+
         params = new(params)
         if params.max_tokens {
             params.max_completion_tokens = params.max_tokens > 16384 && 16384 || params.max_tokens
             params.max_tokens = undefined
         }
-        `(error, data) = await(opail.sdk.chat.completions.create(params))
+        loop {
+            `(error, data) = await(opail.sdk.chat.completions.create(params))
+            if !retrier(error)
+                break
+        }
         if error
             list(Error("chatCompletion failed:", new(error)))
         else

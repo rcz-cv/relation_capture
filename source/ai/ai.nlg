@@ -10,6 +10,8 @@
  *
  */
 
+common;;
+
 
 /*
  * aiInit
@@ -25,5 +27,6 @@ function aiInit(local manifest) {
     Naan.module.build(module.id, "ai", function(modobj, compobj) {
         compobj.manifest = manifest
         require("naanlib:frameworks/common").LiveImport()
+        common = require("naanlib:frameworks/common/utils.nlg")
     })
 } ();
