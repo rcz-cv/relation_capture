@@ -1,7 +1,7 @@
 #
 # label_openai.txt
 #
-# Prompt parameters for labeling samples in Flickr30k using OpenAI.
+# Prompt parameters for labeling Flickr30k samples for relationships using OpenAI.
 #
 
 ========== label ==================
@@ -14,6 +14,42 @@ messages: [
 max_tokens: 1000
 temperature: 0
 stream: false
+
+# update_header
+#
+# Provide the updated CSV header we will use.
+#
+update_header: function(update_header) {
+    header.concat("relational", "reasoning")
+}
+
+# pre_format
+#
+# Format the array of columns for template substitution.
+#
+pre_format: function(sample) {
+    {
+        captions: JSONparse(sample.0)                                       // "captions" becomes array of 5 sentences
+    }
+}
+
+# post_parse
+#
+# Parse the AI response and return the new array of columns.
+#
+post_parse: function(response, sample, local error, relate) {
+    `(error, relate) = JsonParse(response.choices.0.message.content)
+    if !error {
+        sample.push(tostring(relate.relational).toLowerCase())              // "true" or "false"
+        sample.push(relate)                                                 // new column 5
+        `(error, data) = JsonStringify(sample.6)
+    }
+    if !error {
+        sample.6 = data                                                     // add our evidence, etc.
+        list(false, sample)
+    } else
+        list(error)
+}
 
 ---------- role_system ------------
 

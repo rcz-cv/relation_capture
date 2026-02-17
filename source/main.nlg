@@ -184,8 +184,8 @@ closure getLabeler(cloud, local mproc, error, model, parmpath, prompts, datapath
             ErrorDebuglog("test: cannot access AI parameters", error)
             return (list(error))
         }
-        datapath = JSpath.join(Configuration.localRootPath, Configuration.flickr30kPath)
-        labeler = captMod.Labeler(datapath, model, prompts)
+        datapath = JSpath.join(Configuration.localRootPath, Configuration.flickr30kPath, "flickr_annotations_30k.csv")
+        labeler = captMod.Labeler(prompts.prompt(model, "label"), datapath) // use "label" prompt
     }
     if error
         list(error)
@@ -201,14 +201,14 @@ closure getLabeler(cloud, local mproc, error, model, parmpath, prompts, datapath
  *
  */
 
-closure test(lineid, local error, labeler, response, sample) {
+closure test(lineid, local error, labeler, sample) {
     `(error, labeler) = getLabeler("$CloudName$")
     if !error
-        `(error, response, sample) = labeler.test(lineid)
+        `(error, sample) = labeler.test(lineid)
     if error
         list(error)
     else
-        list(false, response, sample)
+        list(false, sample)
 };;
 
 

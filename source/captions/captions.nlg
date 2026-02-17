@@ -17,97 +17,64 @@ csvMod;;
 /*
  * Labeler
  *
- *     Label flickr30k samples as requested.
+ *     Apply the prompt to the CSV file.
  *
  */
 
-closure Labeler(dsPath, model, prompts, local laber) {
+closure Labeler(prompt, inpath, local laber) {
     global(JSpath, csvMod)
     laber = new(object, this)
-    laber.prompt = prompts.prompt(model, "label")
 
     // label
     //
-    // Analyze a single sample for its degree of relational semantics.
+    // Analyze a single sample according to the prompt.
     //
-    // The sample should be an array of columns:
-    //
-    //  {
-    //      sentences[5]                        // an array of 5 sentence strings
-    //      sentids[]                           // an array of 5 sentence identifier integers, starting with zero
-    //      group                               // train / test / verify
-    //      filename                            // image filename
-    //      img_id                              // a sample identifier integer, starting with zero
-    //  }
-    //
-    // And the result will be the same with an additional field containing this dictionary:
-    //
-    //  {
-    //      relational  : true,
-    //      confidence  : 0.74,
-    //      reason_codes: ["spatial", "interaction"],
-    //      evidence    : [ "An elderly woman is eating a burger while the man next to her touching his hat.",
-    //                      "Two older women sit at a table with two coolers in front of them."]
-    //  }
-    //
-    closure label(line, local sample, error, sentences, response, relate) {
-        sample = csvMod.csvParse(line).0                                    // sample is array of 5 columns
-        `(error, sentences) = JsonParse(sample.0)
+    closure label(sample, local error, input, response, output) {
+        `(error, input) = prompt.callProc(`pre_format, sample)              // sample is array of 5 columns
         if !error
-            `(error, response) = laber.prompt.query({
-                captions: sentences
-            })
-        if !error {
-            `(error, relate) = JsonParse(response.choices.0.message.content)
-            if !error {
-                sample.push(tostring(relate.relational).toLowerCase())      // "true" or "false"
-                sample.push(relate)
-            }
-        }
-        if error
-            list(error)
+            `(error, response) = prompt.query(input)
+        if !error
+            `(error, output) = prompt.callProc(`post_parse, response, sample)
+        if !error
+            list(false, output)
         else
-            list(false, response, sample)                                   // sample is array of 6 columns
+            list(error)
     }
     
     // test
     //
-    // Test that the labeler is working by labeling the first sample.
+    // Test that the labeler is working by labeling the nth (default first) sample.
     //
     laber.test = function test(lineid,
-        local annopath, reader, error, line, header, response, sample) {
+        local reader, error, line, header, output) {
         if !lineid
             lineid = 0
-        annopath = JSpath.join(dsPath, "flickr_annotations_30k.csv")
-        reader = LineReader(annopath, {
-            firstLine: lineid                                               // header
-            lastLine: lineid+1                                              // first sample
+        reader = LineReader(inpath, {
+            firstLine: lineid                                               // header if 0
+            lastLine: lineid+1                                              // second sample if first is header
         })
         `(error, line) = reader.readline()
-        if !error
+        if lineid == 0 && !error {                                          // bypass the header
             header = csvMod.csvParse(line).0
-        if !error
             `(error, line) = reader.readline()
-        if !error {
-            if line
-                `(error, response, sample) = label(line)
-            else
-                response = sample = false
         }
-        if error
-            list(error)
+        if !error && line                                                   // line is false at EOF
+            `(error, output) = label(csvMod.csvParse(line).0)
+        if !error
+            list(false, output)
         else
-            list(false, response, sample)
+            list(error)
     }
     
     // convert
     //
-    // Convert the line range to an ouput file.
+    // Convert the line range to an ouput file. This works by procesing batches, within each batch
+    // the samples are processed asynchronously up to 100 at a time. This preserves the sample order
+    // without having unbounded batch size.
     //
     laber.convert = function convert(outpath, firstLine, lastLine,
-        local annopath, reader, writer, error, line, header, batchSize, batch, results) {
-        annopath = JSpath.join(dsPath, "flickr_annotations_30k.csv")
-        reader = LineReader(annopath, {
+        local reader, writer, error, line, header, batchSize, batchCount, batch, results) {
+        reader = LineReader(inpath, {
             firstLine: firstLine                                            // header
             lastLine: lastLine                                              // first sample
         })
@@ -117,13 +84,16 @@ closure Labeler(dsPath, model, prompts, local laber) {
         `(error, line) = reader.readline()
         if !error {
             header = csvMod.csvParse(line).0
-            `(error) = writer.writeline(csvMod.csvPrint([header]))
+            `(error, header) = prompt.callProc(`update_header, header)
+            if !error
+                `(error) = writer.writeline(csvMod.csvPrint([header]))
         }
         printline("\n---")
         batchSize = 1000
+        batchCount = 0
         while !error {
             batch = []
-            while batch.length < batchSize {
+            while batch.length < batchSize {                                // fill this batch...
                 `(error, line) = reader.readline()
                 if error
                     break
@@ -135,22 +105,18 @@ closure Labeler(dsPath, model, prompts, local laber) {
             if batch.length == 0
                 break
             results = asyncArray(batch, 100, closure label1(entry, index, cancel,
-                local error, response, sample, data, line) {
-                `(error, response, sample) = label(entry)
-                if !error 
-                    `(error, data) = JsonStringify(sample.6)
-                if !error {
-                    sample.6 = data
-                    line = csvMod.csvPrint([sample])
-                }
+                local error, output) {                                      // do one sample in batch
+                `(error, output) = label(csvMod.csvParse(entry).0)
                 if error
-                    ErrorString(error)
+                    ErrorString(error)                                      // write error string to file (!)
                 else
-                    line
+                    csvMod.csvPrint([output])                               // just one line, in []
             }).wait()
             while results.length > 0
                 writer.writeline(results.shift())
-            print("+")
+            print("+")                                                      // "+" after each batch
+            if ++batchCount % 5 == 0
+                print("|")                                                  // group by fives
         }
         writer.close()
         printline("\n---")
