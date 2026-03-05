@@ -79,6 +79,7 @@ Ambiguity rules:
 Output format:
 Return ONLY strict JSON (no markdown, no extra text) with keys:
 - "relational": boolean
+- "relational_count": number of captions from 0 to 5 that clearly express a relational scene as defined above
 - "confidence": number from 0 to 1
 - "reason_codes": array of short strings from this set:
   ["interaction","spatial","social","group","co_presence_only","single_entity","attributes_only","ambiguous"]

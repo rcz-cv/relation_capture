@@ -163,9 +163,9 @@ closure hello(local result) {
  */
 
 closure getLabeler(cloud, local mproc, error, model, parmpath, prompts, datapath, labeler) {
-    if cloud == "yc"
+    if cloud == "aws"
         mproc = openai
-    else if cloud == "aws"
+    else if cloud == "yc"
         mproc = gigachat
     else
         return(list(Error("Unknown Cloud:", cloud)))
