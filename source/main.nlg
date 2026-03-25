@@ -83,7 +83,7 @@ closure openai(options, error, creds, oai, data) {
 
     require("local:ai/v_openai.nlg")
     `(error, creds) = readRuntimeFile(JSpath.join(Configuration.localRootPath, Configuration.oai.credentials), "json")
-    if creds.relayHost
+    if creds.login.relayHost
         oai = aiMod.OpenAIRelay()
     else
         oai = aiMod.OpenAI()
